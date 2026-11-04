@@ -11,6 +11,7 @@ interface SidebarProps {
   route: CalculatedRoute | null;
   isCalculating: boolean;
   routeError: string | null;
+  userProximity?: [number, number];
   onSelectOrigin: (feature: GeocodingFeature) => void;
   onClearOrigin: () => void;
   onAddDestination: (feature: GeocodingFeature) => void;
@@ -26,6 +27,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   route,
   isCalculating,
   routeError,
+  userProximity,
   onSelectOrigin,
   onClearOrigin,
   onAddDestination,
@@ -34,6 +36,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRemoveDestination,
   onResetAll,
 }) => {
+  // Dá preferência às coordenadas da Origem; se não tiver, usa a do GPS do usuário
+  const searchProximity: [number, number] | undefined = origin
+    ? [origin.longitude, origin.latitude]
+    : userProximity;
+
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -83,6 +90,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <AddressSearch
               placeholder="Digite o endereço de partida..."
               onSelect={onSelectOrigin}
+              proximity={searchProximity}
             />
           )}
         </section>
@@ -93,9 +101,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Plus size={16} className="text-blue" /> Adicionar Paradas / Destinos
           </label>
           <AddressSearch
-            placeholder="Digite um destino para adicionar..."
+            placeholder="Digite nome do local, shopping ou rua..."
             onSelect={onAddDestination}
             disabled={destinations.length >= 24}
+            proximity={searchProximity}
           />
           {destinations.length >= 24 && (
             <span className="warning-text">Limite de 24 destinos atingido.</span>

@@ -8,12 +8,14 @@ interface AddressSearchProps {
   placeholder?: string;
   onSelect: (feature: GeocodingFeature) => void;
   disabled?: boolean;
+  proximity?: [number, number]; // [lng, lat]
 }
 
 export const AddressSearch: React.FC<AddressSearchProps> = ({
   placeholder = 'Buscar endereço...',
   onSelect,
   disabled = false,
+  proximity,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<GeocodingFeature[]>([]);
@@ -21,7 +23,7 @@ export const AddressSearch: React.FC<AddressSearchProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const debouncedSearchTerm = useDebounce(searchTerm, 400);
+  const debouncedSearchTerm = useDebounce(searchTerm, 350);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // Fecha o dropdown ao clicar fora
@@ -36,7 +38,7 @@ export const AddressSearch: React.FC<AddressSearchProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!debouncedSearchTerm || debouncedSearchTerm.trim().length < 3) {
+    if (!debouncedSearchTerm || debouncedSearchTerm.trim().length < 2) {
       setResults([]);
       setIsLoading(false);
       setError(null);
@@ -47,7 +49,7 @@ export const AddressSearch: React.FC<AddressSearchProps> = ({
     setIsLoading(true);
     setError(null);
 
-    searchPlaces(debouncedSearchTerm)
+    searchPlaces(debouncedSearchTerm, { proximity, limit: 10 })
       .then((features) => {
         if (isMounted) {
           setResults(features);
@@ -69,7 +71,7 @@ export const AddressSearch: React.FC<AddressSearchProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [debouncedSearchTerm]);
+  }, [debouncedSearchTerm, proximity]);
 
   const handleSelect = (item: GeocodingFeature) => {
     onSelect(item);
