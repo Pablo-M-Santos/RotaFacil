@@ -13,13 +13,15 @@ interface MapViewProps {
   onUserLocationFound?: (lng: number, lat: number) => void;
 }
 
-type MapStyleType = 'streets' | 'satellite' | 'outdoors' | 'dark';
+type MapStyleType = 'standard' | 'realistic' | 'satellite' | 'streets' | 'outdoors' | 'dark';
 
 const MAP_STYLES: Record<MapStyleType, { label: string; url: string }> = {
+  standard: { label: 'Padrão', url: 'mapbox://styles/mapbox/streets-v12' },
+  realistic: { label: 'Realista (3D)', url: 'mapbox://styles/mapbox/standard' },
+  satellite: { label: 'Satélite HD', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
   streets: { label: 'Ruas', url: 'mapbox://styles/mapbox/streets-v12' },
-  satellite: { label: 'Satélite', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
   outdoors: { label: 'Relevo', url: 'mapbox://styles/mapbox/outdoors-v12' },
-  dark: { label: 'Escuro', url: 'mapbox://styles/mapbox/dark-v11' },
+  dark: { label: 'Escuro 3D', url: 'mapbox://styles/mapbox/dark-v11' },
 };
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -34,8 +36,8 @@ export const MapView: React.FC<MapViewProps> = ({
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null);
 
-  const [currentStyle, setCurrentStyle] = useState<MapStyleType>('streets');
-  const [is3DMode, setIs3DMode] = useState<boolean>(false);
+  const [currentStyle, setCurrentStyle] = useState<MapStyleType>('standard');
+  const [is3DMode, setIs3DMode] = useState<boolean>(true);
   const [showStyleMenu, setShowStyleMenu] = useState<boolean>(false);
   const styleMenuRef = useRef<HTMLDivElement>(null);
 
@@ -50,10 +52,11 @@ export const MapView: React.FC<MapViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Adiciona a camada de rota
-  const addRouteLayer = () => {
+  // Adiciona a camada de rota e edifícios 3D se o estilo for antigo
+  const configureLayersAnd3D = () => {
     if (!map.current) return;
 
+    // 1. Configurar rota GeoJSON
     if (!map.current.getSource('route')) {
       map.current.addSource('route', {
         type: 'geojson',
@@ -79,14 +82,71 @@ export const MapView: React.FC<MapViewProps> = ({
         },
         paint: {
           'line-color': '#2563eb',
-          'line-width': 5,
-          'line-opacity': 0.85,
+          'line-width': 6,
+          'line-opacity': 0.9,
         },
       });
     }
+
+    // 2. Extrusão 3D de edifícios volumétricos coloridos em estilos vetoriais
+    const styleId = currentStyle;
+    if (styleId !== 'standard' && styleId !== 'satellite') {
+      const layers = map.current.getStyle().layers;
+      const labelLayerId = layers?.find(
+        (layer) => layer.type === 'symbol' && layer.layout && (layer.layout as any)['text-field']
+      )?.id;
+
+      if (!map.current.getLayer('3d-buildings')) {
+        map.current.addLayer(
+          {
+            id: '3d-buildings',
+            source: 'composite',
+            'source-layer': 'building',
+            filter: ['==', 'extrude', 'true'],
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+              'fill-extrusion-color': [
+                'interpolate',
+                ['linear'],
+                ['get', 'height'],
+                0,
+                '#e2e8f0',
+                20,
+                '#94a3b8',
+                50,
+                '#64748b',
+                100,
+                '#3b82f6',
+              ],
+              'fill-extrusion-height': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                14,
+                0,
+                14.05,
+                ['get', 'height'],
+              ],
+              'fill-extrusion-base': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                14,
+                0,
+                14.05,
+                ['get', 'min_height'],
+              ],
+              'fill-extrusion-opacity': 0.85,
+            },
+          },
+          labelLayerId
+        );
+      }
+    }
   };
 
-  // Inicializa o mapa
+  // Inicializa o mapa com estilo 3D Standard de alta fidelidade
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
@@ -94,23 +154,23 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const initialCenter: [number, number] = origin
       ? [origin.longitude, origin.latitude]
-      : [-38.6217, -3.8798]; // Centralizado na região de Maracanaú/CE
+      : [-38.6217, -3.8798]; // Região de Maracanaú/CE
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
-      style: MAP_STYLES.streets.url,
+      style: MAP_STYLES.standard.url,
       center: initialCenter,
-      zoom: 13,
-      pitch: 0,
-      bearing: 0,
+      zoom: 15,
+      pitch: 55, // Inicia inclinado em perspectiva 3D
+      bearing: -15,
     });
 
-    // Adiciona controle padrão do Mapbox com bússola (permite girar 360 clicando na bússola)
     map.current.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
 
     map.current.on('style.load', () => {
-      addRouteLayer();
-      // Atualiza rota se já existir dados calculados
+      configureLayersAnd3D();
+
+      // Se já houver rota calculada, desenha no novo estilo
       if (route && route.geometry && map.current) {
         const source = map.current.getSource('route') as mapboxgl.GeoJSONSource | undefined;
         source?.setData({
@@ -173,7 +233,6 @@ export const MapView: React.FC<MapViewProps> = ({
     };
   }, []);
 
-  // Alterna o estilo visual do mapa (Ruas, Satélite, Relevo)
   const handleChangeStyle = (styleKey: MapStyleType) => {
     if (!map.current || currentStyle === styleKey) return;
     setCurrentStyle(styleKey);
@@ -181,7 +240,6 @@ export const MapView: React.FC<MapViewProps> = ({
     setShowStyleMenu(false);
   };
 
-  // Alterna visão 3D / Inclinação (Pitch de 60 graus)
   const toggle3DView = () => {
     if (!map.current) return;
     const nextMode = !is3DMode;
@@ -194,7 +252,6 @@ export const MapView: React.FC<MapViewProps> = ({
     });
   };
 
-  // Girar 360 Graus ao redor do ponto central
   const rotate360 = () => {
     if (!map.current) return;
     const currentBearing = map.current.getBearing();
@@ -205,7 +262,6 @@ export const MapView: React.FC<MapViewProps> = ({
     });
   };
 
-  // Botão "Minha Localização" (GPS)
   const handleLocateMe = () => {
     if (!navigator.geolocation) {
       alert('Geolocalização não é suportada pelo seu navegador.');
@@ -218,7 +274,8 @@ export const MapView: React.FC<MapViewProps> = ({
         if (map.current) {
           map.current.flyTo({
             center: [longitude, latitude],
-            zoom: 14,
+            zoom: 15,
+            pitch: 55,
             essential: true,
           });
         }
@@ -234,7 +291,7 @@ export const MapView: React.FC<MapViewProps> = ({
     );
   };
 
-  // Atualiza marcadores no mapa
+  // Marcadores no mapa
   useEffect(() => {
     if (!map.current) return;
 
@@ -285,7 +342,7 @@ export const MapView: React.FC<MapViewProps> = ({
     if (hasPoints && !route) {
       map.current.fitBounds(bounds, {
         padding: 80,
-        maxZoom: 15,
+        maxZoom: 16,
         duration: 1000,
       });
     }
@@ -310,6 +367,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
       map.current.fitBounds(bounds, {
         padding: 70,
+        pitch: is3DMode ? 50 : 0,
         duration: 1200,
       });
     } else {
@@ -322,11 +380,10 @@ export const MapView: React.FC<MapViewProps> = ({
         },
       });
     }
-  }, [route]);
+  }, [route, is3DMode]);
 
   return (
     <div className="map-view-wrapper">
-      {/* Barra de Controles de Câmera e Visualização */}
       <div className="map-top-bar">
         <button
           type="button"
@@ -358,13 +415,12 @@ export const MapView: React.FC<MapViewProps> = ({
           <span>Girar 360°</span>
         </button>
 
-        {/* Seletor de Camadas / Estilos */}
         <div className="style-selector-container" ref={styleMenuRef}>
           <button
             type="button"
-            className="map-ctrl-btn"
+            className="map-ctrl-btn highlight"
             onClick={() => setShowStyleMenu(!showStyleMenu)}
-            title="Mudar camada do mapa"
+            title="Mudar estilo visual"
           >
             <Layers size={17} />
             <span>{MAP_STYLES[currentStyle].label}</span>
@@ -388,7 +444,7 @@ export const MapView: React.FC<MapViewProps> = ({
       </div>
 
       <div className="map-instruction-banner">
-        💡 <strong>Controles 360°:</strong> Arraste com o <strong>botão direito do mouse</strong> (ou segure <code>Ctrl</code> + botão esquerdo) para girar 360° livremente em 3D!
+        🏙️ <strong>Visão 3D Ativa:</strong> Dê zoom para ver prédios, shoppings e estruturas em volume real! Use o botão direito do mouse para girar livremente.
       </div>
 
       <div ref={mapContainer} className="map-container" />
