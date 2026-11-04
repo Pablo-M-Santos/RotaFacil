@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useRoutePlanner } from '../hooks/useRoutePlanner';
 import { Sidebar } from '../components/layout/Sidebar';
 import { MapView } from '../components/map/MapView';
 import { validateMapboxToken } from '../services/mapbox/mapboxClient';
 import { AlertTriangle } from 'lucide-react';
+import { GeocodingFeature } from '../types';
 
 export const RoutePlanner: React.FC = () => {
   const {
@@ -21,7 +22,22 @@ export const RoutePlanner: React.FC = () => {
     resetAll,
   } = useRoutePlanner();
 
+  // Guarda a localização detectada do usuário para calibrar a proximidade da busca
+  const [userCoords, setUserCoords] = useState<[number, number] | undefined>(undefined);
+
   const isTokenConfigured = validateMapboxToken();
+
+  const handleMapClickPoint = (feature: GeocodingFeature, actionType: 'origin' | 'destination') => {
+    if (actionType === 'origin') {
+      selectOrigin(feature);
+    } else {
+      addDestination(feature);
+    }
+  };
+
+  const handleUserLocationFound = (lng: number, lat: number) => {
+    setUserCoords([lng, lat]);
+  };
 
   return (
     <div className="app-container">
@@ -42,6 +58,7 @@ export const RoutePlanner: React.FC = () => {
           route={route}
           isCalculating={isCalculating}
           routeError={routeError}
+          userProximity={userCoords}
           onSelectOrigin={selectOrigin}
           onClearOrigin={clearOrigin}
           onAddDestination={addDestination}
@@ -55,6 +72,8 @@ export const RoutePlanner: React.FC = () => {
           origin={origin}
           destinations={destinations}
           route={route}
+          onMapClickPoint={handleMapClickPoint}
+          onUserLocationFound={handleUserLocationFound}
         />
       </main>
     </div>
