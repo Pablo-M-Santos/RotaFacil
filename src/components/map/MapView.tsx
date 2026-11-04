@@ -1,9 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import { Origin, Destination, CalculatedRoute, GeocodingFeature } from '../../types';
 import { MAPBOX_TOKEN } from '../../services/mapbox/mapboxClient';
 import { reverseGeocode } from '../../services/mapbox/geocoding';
-import { LocateFixed } from 'lucide-react';
+import { LocateFixed, Layers, Box, RotateCw } from 'lucide-react';
 
 interface MapViewProps {
   origin: Origin | null;
@@ -12,6 +12,15 @@ interface MapViewProps {
   onMapClickPoint?: (feature: GeocodingFeature, actionType: 'origin' | 'destination') => void;
   onUserLocationFound?: (lng: number, lat: number) => void;
 }
+
+type MapStyleType = 'streets' | 'satellite' | 'outdoors' | 'dark';
+
+const MAP_STYLES: Record<MapStyleType, { label: string; url: string }> = {
+  streets: { label: 'Ruas', url: 'mapbox://styles/mapbox/streets-v12' },
+  satellite: { label: 'Satélite', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
+  outdoors: { label: 'Relevo', url: 'mapbox://styles/mapbox/outdoors-v12' },
+  dark: { label: 'Escuro', url: 'mapbox://styles/mapbox/dark-v11' },
+};
 
 export const MapView: React.FC<MapViewProps> = ({
   origin,
@@ -25,30 +34,27 @@ export const MapView: React.FC<MapViewProps> = ({
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null);
 
-  // Inicializa o mapa
+  const [currentStyle, setCurrentStyle] = useState<MapStyleType>('streets');
+  const [is3DMode, setIs3DMode] = useState<boolean>(false);
+  const [showStyleMenu, setShowStyleMenu] = useState<boolean>(false);
+  const styleMenuRef = useRef<HTMLDivElement>(null);
+
+  // Fecha menu de estilos ao clicar fora
   useEffect(() => {
-    if (!mapContainer.current || map.current) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (styleMenuRef.current && !styleMenuRef.current.contains(event.target as Node)) {
+        setShowStyleMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-    mapboxgl.accessToken = MAPBOX_TOKEN;
+  // Adiciona a camada de rota
+  const addRouteLayer = () => {
+    if (!map.current) return;
 
-    // Se já tiver uma origem salva, centra nela; senão, inicia em uma visão padrão
-    const initialCenter: [number, number] = origin
-      ? [origin.longitude, origin.latitude]
-      : [-38.6258, -3.8767]; // Coordenadas aproximadas de Maracanaú/CE
-
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
-      center: initialCenter,
-      zoom: 12,
-    });
-
-    map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
-
-    map.current.on('load', () => {
-      if (!map.current) return;
-
-      // Adiciona source da rota GeoJSON vazia
+    if (!map.current.getSource('route')) {
       map.current.addSource('route', {
         type: 'geojson',
         data: {
@@ -60,8 +66,9 @@ export const MapView: React.FC<MapViewProps> = ({
           },
         },
       });
+    }
 
-      // Linha da rota
+    if (!map.current.getLayer('route-line')) {
       map.current.addLayer({
         id: 'route-line',
         type: 'line',
@@ -76,25 +83,57 @@ export const MapView: React.FC<MapViewProps> = ({
           'line-opacity': 0.85,
         },
       });
+    }
+  };
+
+  // Inicializa o mapa
+  useEffect(() => {
+    if (!mapContainer.current || map.current) return;
+
+    mapboxgl.accessToken = MAPBOX_TOKEN;
+
+    const initialCenter: [number, number] = origin
+      ? [origin.longitude, origin.latitude]
+      : [-38.6217, -3.8798]; // Centralizado na região de Maracanaú/CE
+
+    map.current = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: MAP_STYLES.streets.url,
+      center: initialCenter,
+      zoom: 13,
+      pitch: 0,
+      bearing: 0,
     });
 
-    // Evento de clique no mapa para Reverse Geocoding
+    // Adiciona controle padrão do Mapbox com bússola (permite girar 360 clicando na bússola)
+    map.current.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+
+    map.current.on('style.load', () => {
+      addRouteLayer();
+      // Atualiza rota se já existir dados calculados
+      if (route && route.geometry && map.current) {
+        const source = map.current.getSource('route') as mapboxgl.GeoJSONSource | undefined;
+        source?.setData({
+          type: 'Feature',
+          properties: {},
+          geometry: route.geometry,
+        });
+      }
+    });
+
+    // Clique no mapa para Reverse Geocoding
     map.current.on('click', async (e) => {
       if (!onMapClickPoint || !map.current) return;
 
       const { lng, lat } = e.lngLat;
 
-      // Fecha popup anterior se houver
       if (clickPopupRef.current) {
         clickPopupRef.current.remove();
       }
 
-      // Mostra popup de carregamento rápido
       const popupDiv = document.createElement('div');
       popupDiv.className = 'map-click-popup';
-      popupDiv.innerHTML = `
-        <div class="popup-title">Buscando endereço...</div>
-      `;
+      popupDiv.innerHTML = `<div class="popup-title">Buscando endereço...</div>`;
 
       clickPopupRef.current = new mapboxgl.Popup({ offset: 15, closeButton: true })
         .setLngLat([lng, lat])
@@ -133,6 +172,38 @@ export const MapView: React.FC<MapViewProps> = ({
       map.current = null;
     };
   }, []);
+
+  // Alterna o estilo visual do mapa (Ruas, Satélite, Relevo)
+  const handleChangeStyle = (styleKey: MapStyleType) => {
+    if (!map.current || currentStyle === styleKey) return;
+    setCurrentStyle(styleKey);
+    map.current.setStyle(MAP_STYLES[styleKey].url);
+    setShowStyleMenu(false);
+  };
+
+  // Alterna visão 3D / Inclinação (Pitch de 60 graus)
+  const toggle3DView = () => {
+    if (!map.current) return;
+    const nextMode = !is3DMode;
+    setIs3DMode(nextMode);
+
+    map.current.easeTo({
+      pitch: nextMode ? 60 : 0,
+      bearing: nextMode ? -20 : 0,
+      duration: 1000,
+    });
+  };
+
+  // Girar 360 Graus ao redor do ponto central
+  const rotate360 = () => {
+    if (!map.current) return;
+    const currentBearing = map.current.getBearing();
+    map.current.easeTo({
+      bearing: currentBearing + 180,
+      pitch: is3DMode ? 60 : 45,
+      duration: 2500,
+    });
+  };
 
   // Botão "Minha Localização" (GPS)
   const handleLocateMe = () => {
@@ -173,7 +244,6 @@ export const MapView: React.FC<MapViewProps> = ({
     const bounds = new mapboxgl.LngLatBounds();
     let hasPoints = false;
 
-    // Marcador de Origem (Verde)
     if (origin) {
       const el = document.createElement('div');
       el.className = 'custom-marker origin-marker';
@@ -192,7 +262,6 @@ export const MapView: React.FC<MapViewProps> = ({
       hasPoints = true;
     }
 
-    // Marcadores de Destinos (Azul com número de ordem)
     destinations.forEach((dest) => {
       const el = document.createElement('div');
       el.className = 'custom-marker destination-marker';
@@ -222,7 +291,7 @@ export const MapView: React.FC<MapViewProps> = ({
     }
   }, [origin, destinations, route]);
 
-  // Atualiza o traçado da rota
+  // Atualiza traçado da rota
   useEffect(() => {
     if (!map.current) return;
 
@@ -257,18 +326,69 @@ export const MapView: React.FC<MapViewProps> = ({
 
   return (
     <div className="map-view-wrapper">
-      <button
-        type="button"
-        className="btn-locate-gps"
-        onClick={handleLocateMe}
-        title="Centralizar na minha localização"
-      >
-        <LocateFixed size={18} />
-        <span>Minha Localização</span>
-      </button>
+      {/* Barra de Controles de Câmera e Visualização */}
+      <div className="map-top-bar">
+        <button
+          type="button"
+          className="map-ctrl-btn"
+          onClick={handleLocateMe}
+          title="Centralizar na minha localização"
+        >
+          <LocateFixed size={17} />
+          <span>GPS</span>
+        </button>
+
+        <button
+          type="button"
+          className={`map-ctrl-btn ${is3DMode ? 'active' : ''}`}
+          onClick={toggle3DView}
+          title="Alternar visão 3D e 2D (inclinação)"
+        >
+          <Box size={17} />
+          <span>{is3DMode ? 'Visão 2D' : 'Visão 3D'}</span>
+        </button>
+
+        <button
+          type="button"
+          className="map-ctrl-btn"
+          onClick={rotate360}
+          title="Rotacionar câmera 360°"
+        >
+          <RotateCw size={17} />
+          <span>Girar 360°</span>
+        </button>
+
+        {/* Seletor de Camadas / Estilos */}
+        <div className="style-selector-container" ref={styleMenuRef}>
+          <button
+            type="button"
+            className="map-ctrl-btn"
+            onClick={() => setShowStyleMenu(!showStyleMenu)}
+            title="Mudar camada do mapa"
+          >
+            <Layers size={17} />
+            <span>{MAP_STYLES[currentStyle].label}</span>
+          </button>
+
+          {showStyleMenu && (
+            <div className="style-dropdown">
+              {(Object.keys(MAP_STYLES) as MapStyleType[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={`style-dropdown-item ${currentStyle === key ? 'selected' : ''}`}
+                  onClick={() => handleChangeStyle(key)}
+                >
+                  {MAP_STYLES[key].label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
       <div className="map-instruction-banner">
-        💡 <strong>Dica:</strong> Clique em qualquer ponto no mapa para definir a Origem ou adicionar uma Parada!
+        💡 <strong>Controles 360°:</strong> Arraste com o <strong>botão direito do mouse</strong> (ou segure <code>Ctrl</code> + botão esquerdo) para girar 360° livremente em 3D!
       </div>
 
       <div ref={mapContainer} className="map-container" />

@@ -512,31 +512,91 @@ body {
   height: 100%;
 }
 
-/* Botão Localização GPS */
-.btn-locate-gps {
+/* Barra Superior de Controles do Mapa */
+.map-top-bar {
   position: absolute;
   top: 14px;
   left: 14px;
   z-index: 5;
-  background-color: #ffffff;
-  color: #1e293b;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 14px;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-  transition: all 0.2s ease;
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 
-.btn-locate-gps:hover {
-  background-color: #f8fafc;
+.map-ctrl-btn {
+  background-color: transparent;
+  color: #334155;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.map-ctrl-btn:hover {
+  background-color: #f1f5f9;
   color: var(--primary);
-  border-color: #cbd5e1;
+}
+
+.map-ctrl-btn.active {
+  background-color: #eff6ff;
+  color: var(--primary);
+  border-color: #bfdbfe;
+}
+
+/* Seletor de Camadas / Dropdown */
+.style-selector-container {
+  position: relative;
+}
+
+.style-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  background-color: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  min-width: 120px;
+  z-index: 20;
+}
+
+.style-dropdown-item {
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #334155;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.style-dropdown-item:hover {
+  background-color: #f1f5f9;
+  color: var(--primary);
+}
+
+.style-dropdown-item.selected {
+  background-color: #eff6ff;
+  color: var(--primary);
+  font-weight: 700;
 }
 
 /* Banner de Instrução do Mapa */
