@@ -1,11 +1,33 @@
-import React from 'react';
-import { MapPin, Navigation, Plus, RotateCcw } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Navigation,
+  MapPin,
+  Plus,
+  RotateCcw,
+  LocateFixed,
+  Box,
+  RotateCw,
+  Layers,
+  ChevronDown,
+} from 'lucide-react';
 import { AddressSearch } from '../destinations/AddressSearch';
 import { DestinationList } from '../destinations/DestinationList';
 import { RouteSummary } from './RouteSummary';
 import { Origin, Destination, CalculatedRoute, GeocodingFeature } from '../../types';
 
+type MapStyleType = 'standard' | 'realistic' | 'satellite' | 'streets' | 'outdoors' | 'dark';
+
+const MAP_STYLES: Record<MapStyleType, string> = {
+  realistic: 'Realista 3D',
+  standard: 'Vetor Padrão',
+  satellite: 'Satélite HD',
+  streets: 'Ruas',
+  outdoors: 'Topográfico',
+  dark: 'Modo Escuro',
+};
+
 interface SidebarProps {
+  // Route planner
   origin: Origin | null;
   destinations: Destination[];
   route: CalculatedRoute | null;
@@ -19,6 +41,13 @@ interface SidebarProps {
   onMoveDown: (id: string) => void;
   onRemoveDestination: (id: string) => void;
   onResetAll: () => void;
+  // Map controls
+  is3DMode: boolean;
+  currentStyle: MapStyleType;
+  onLocateMe: () => void;
+  onToggle3D: () => void;
+  onRotate: () => void;
+  onChangeStyle: (style: MapStyleType) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -35,107 +64,181 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onMoveDown,
   onRemoveDestination,
   onResetAll,
+  is3DMode,
+  currentStyle,
+  onLocateMe,
+  onToggle3D,
+  onRotate,
+  onChangeStyle,
 }) => {
-  // Dá preferência às coordenadas da Origem; se não tiver, usa a do GPS do usuário
+  const [showStyleMenu, setShowStyleMenu] = useState(false);
+
   const searchProximity: [number, number] | undefined = origin
     ? [origin.longitude, origin.latitude]
     : userProximity;
 
   return (
-    <aside className="sidebar">
-      <header className="sidebar-header">
-        <div className="brand">
-          <Navigation className="brand-icon" size={26} />
-          <div>
-            <h1>RotaFácil</h1>
-            <p className="subtitle">Planejador de Entregas</p>
+    <aside className="sidebar-floating-wrap">
+      <div className="sidebar-panel">
+
+        {/* Header */}
+        <header className="sfp-header">
+          <div className="sfp-brand">
+            <div className="sfp-brand-icon">
+              <Navigation size={18} color="#fff" />
+            </div>
+            <div>
+              <h1 className="sfp-title">RotaFácil</h1>
+              <p className="sfp-subtitle">Planejador de Entregas</p>
+            </div>
+          </div>
+          {(origin || destinations.length > 0) && (
+            <button type="button" className="sfp-btn-clear" onClick={onResetAll} title="Limpar tudo">
+              <RotateCcw size={13} />
+              Limpar
+            </button>
+          )}
+        </header>
+
+        {/* Hub de controles do mapa */}
+        <div className="sfp-map-controls">
+          <button
+            type="button"
+            className="sfp-ctrl-btn"
+            onClick={onLocateMe}
+            title="Minha localização (GPS)"
+          >
+            <LocateFixed size={15} />
+            <span>GPS</span>
+          </button>
+
+          <button
+            type="button"
+            className={`sfp-ctrl-btn${is3DMode ? ' sfp-ctrl-active' : ''}`}
+            onClick={onToggle3D}
+            title="Alternar 2D / 3D"
+          >
+            <Box size={15} />
+            <span>{is3DMode ? '2D' : '3D'}</span>
+          </button>
+
+          <button
+            type="button"
+            className="sfp-ctrl-btn"
+            onClick={onRotate}
+            title="Girar câmera 180°"
+          >
+            <RotateCw size={15} />
+            <span>Girar</span>
+          </button>
+
+          <div className="sfp-style-wrap">
+            <button
+              type="button"
+              className="sfp-ctrl-btn sfp-ctrl-layers"
+              onClick={() => setShowStyleMenu((v) => !v)}
+              title="Estilo do mapa"
+            >
+              <Layers size={15} />
+              <span>{MAP_STYLES[currentStyle]}</span>
+              <ChevronDown size={12} style={{ marginLeft: 2, opacity: 0.7 }} />
+            </button>
+
+            {showStyleMenu && (
+              <div className="sfp-style-menu">
+                {(Object.keys(MAP_STYLES) as MapStyleType[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`sfp-style-item${currentStyle === key ? ' sfp-style-selected' : ''}`}
+                    onClick={() => { onChangeStyle(key); setShowStyleMenu(false); }}
+                  >
+                    {MAP_STYLES[key]}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {(origin || destinations.length > 0) && (
-          <button
-            type="button"
-            className="btn-text-danger"
-            onClick={onResetAll}
-            title="Limpar todos os dados"
-          >
-            <RotateCcw size={15} /> Limpar
-          </button>
-        )}
-      </header>
+        <div className="sfp-divider" />
 
-      <div className="sidebar-content">
-        {/* Seção 1: Origem */}
-        <section className="section-group">
-          <label className="section-label">
-            <MapPin size={16} className="text-green" /> Ponto de Partida (Origem)
-          </label>
+        {/* Conteúdo scrollável */}
+        <div className="sfp-body">
 
-          {origin ? (
-            <div className="origin-card">
-              <div className="origin-details">
-                <strong>{origin.name}</strong>
-                <p>{origin.address}</p>
+          {/* Origem */}
+          <section className="sfp-section">
+            <label className="sfp-label">
+              <MapPin size={13} className="sfp-label-icon green" />
+              Ponto de Partida
+            </label>
+
+            {origin ? (
+              <div className="sfp-origin-card">
+                <div className="sfp-origin-dot" />
+                <div className="sfp-origin-info">
+                  <strong>{origin.name}</strong>
+                  <span>{origin.address}</span>
+                </div>
+                <button type="button" className="sfp-btn-swap" onClick={onClearOrigin}>
+                  Trocar
+                </button>
               </div>
-              <button
-                type="button"
-                className="btn-change"
-                onClick={onClearOrigin}
-                title="Alterar ponto de partida"
-              >
-                Trocar
-              </button>
-            </div>
-          ) : (
+            ) : (
+              <AddressSearch
+                placeholder="Digite o endereço de partida..."
+                onSelect={onSelectOrigin}
+                proximity={searchProximity}
+              />
+            )}
+          </section>
+
+          {/* Destinos */}
+          <section className="sfp-section">
+            <label className="sfp-label">
+              <Plus size={13} className="sfp-label-icon blue" />
+              Adicionar Paradas
+            </label>
             <AddressSearch
-              placeholder="Digite o endereço de partida..."
-              onSelect={onSelectOrigin}
+              placeholder="Nome do local ou endereço..."
+              onSelect={onAddDestination}
+              disabled={destinations.length >= 24}
               proximity={searchProximity}
             />
-          )}
-        </section>
-
-        {/* Seção 2: Adicionar Destinos */}
-        <section className="section-group">
-          <label className="section-label">
-            <Plus size={16} className="text-blue" /> Adicionar Paradas / Destinos
-          </label>
-          <AddressSearch
-            placeholder="Digite nome do local, shopping ou rua..."
-            onSelect={onAddDestination}
-            disabled={destinations.length >= 24}
-            proximity={searchProximity}
-          />
-          {destinations.length >= 24 && (
-            <span className="warning-text">Limite de 24 destinos atingido.</span>
-          )}
-        </section>
-
-        {/* Resumo da Rota */}
-        <RouteSummary
-          route={route}
-          isLoading={isCalculating}
-          error={routeError}
-        />
-
-        {/* Seção 3: Lista Ordenada de Destinos */}
-        <section className="section-group flex-fill">
-          <div className="section-title-row">
-            <label className="section-label">
-              Destinos ({destinations.length})
-            </label>
-            {destinations.length > 1 && (
-              <span className="hint-label">Use as setas para reordenar</span>
+            {destinations.length >= 24 && (
+              <span className="sfp-warn">Limite de 24 destinos atingido.</span>
             )}
-          </div>
+          </section>
 
-          <DestinationList
-            destinations={destinations}
-            onMoveUp={onMoveUp}
-            onMoveDown={onMoveDown}
-            onRemove={onRemoveDestination}
-          />
-        </section>
+          {/* Métricas */}
+          <RouteSummary route={route} isLoading={isCalculating} error={routeError} />
+
+          {/* Lista de destinos */}
+          {destinations.length > 0 && (
+            <section className="sfp-section sfp-section-list">
+              <div className="sfp-section-row">
+                <label className="sfp-label">Destinos ({destinations.length})</label>
+                {destinations.length > 1 && (
+                  <span className="sfp-hint">Use as setas para reordenar</span>
+                )}
+              </div>
+              <DestinationList
+                destinations={destinations}
+                onMoveUp={onMoveUp}
+                onMoveDown={onMoveDown}
+                onRemove={onRemoveDestination}
+              />
+            </section>
+          )}
+        </div>
+
+        {/* Footer */}
+        <footer className="sfp-footer">
+          <span className="sfp-status">
+            <span className="sfp-status-dot" /> Sistema operacional
+          </span>
+          <span className="sfp-version">v1.0</span>
+        </footer>
       </div>
     </aside>
   );

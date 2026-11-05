@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useRoutePlanner } from '../hooks/useRoutePlanner';
 import { Sidebar } from '../components/layout/Sidebar';
-import { MapView } from '../components/map/MapView';
+import { MapView, MapViewHandle, MapStyleType } from '../components/map/MapView';
 import { validateMapboxToken } from '../services/mapbox/mapboxClient';
 import { AlertTriangle } from 'lucide-react';
 import { GeocodingFeature } from '../types';
@@ -22,22 +22,28 @@ export const RoutePlanner: React.FC = () => {
     resetAll,
   } = useRoutePlanner();
 
-  // Guarda a localização detectada do usuário para calibrar a proximidade da busca
+  const mapRef = useRef<MapViewHandle>(null);
+
+  // Estado espelhado para a sidebar refletir o estado atual do mapa
+  const [mapIs3D, setMapIs3D] = useState(true);
+  const [mapStyle, setMapStyle] = useState<MapStyleType>('realistic');
   const [userCoords, setUserCoords] = useState<[number, number] | undefined>(undefined);
 
   const isTokenConfigured = validateMapboxToken();
 
   const handleMapClickPoint = (feature: GeocodingFeature, actionType: 'origin' | 'destination') => {
-    if (actionType === 'origin') {
-      selectOrigin(feature);
-    } else {
-      addDestination(feature);
-    }
+    if (actionType === 'origin') selectOrigin(feature);
+    else addDestination(feature);
   };
 
   const handleUserLocationFound = (lng: number, lat: number) => {
     setUserCoords([lng, lat]);
   };
+
+  const handleMapStateChange = useCallback((is3D: boolean, style: MapStyleType) => {
+    setMapIs3D(is3D);
+    setMapStyle(style);
+  }, []);
 
   return (
     <div className="app-container">
@@ -52,6 +58,18 @@ export const RoutePlanner: React.FC = () => {
       )}
 
       <main className="main-layout">
+        {/* Mapa ocupa toda a área */}
+        <MapView
+          ref={mapRef}
+          origin={origin}
+          destinations={destinations}
+          route={route}
+          onMapClickPoint={handleMapClickPoint}
+          onUserLocationFound={handleUserLocationFound}
+          onStateChange={handleMapStateChange}
+        />
+
+        {/* Sidebar flutuante sobre o mapa */}
         <Sidebar
           origin={origin}
           destinations={destinations}
@@ -66,14 +84,12 @@ export const RoutePlanner: React.FC = () => {
           onMoveDown={moveDown}
           onRemoveDestination={removeDestination}
           onResetAll={resetAll}
-        />
-
-        <MapView
-          origin={origin}
-          destinations={destinations}
-          route={route}
-          onMapClickPoint={handleMapClickPoint}
-          onUserLocationFound={handleUserLocationFound}
+          is3DMode={mapIs3D}
+          currentStyle={mapStyle}
+          onLocateMe={() => mapRef.current?.locateMe()}
+          onToggle3D={() => mapRef.current?.toggle3D()}
+          onRotate={() => mapRef.current?.rotate()}
+          onChangeStyle={(style) => mapRef.current?.changeStyle(style)}
         />
       </main>
     </div>
