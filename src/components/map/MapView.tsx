@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  forwardRef,
+  useImperativeHandle,
+  memo,
+} from 'react';
 import mapboxgl from 'mapbox-gl';
 import { Origin, Destination, CalculatedRoute, GeocodingFeature } from '../../types';
 import { MAPBOX_TOKEN } from '../../services/mapbox/mapboxClient';
@@ -33,7 +41,29 @@ const MAP_STYLES: Record<MapStyleType, { label: string; url: string }> = {
   dark: { label: 'Modo Escuro', url: 'mapbox://styles/mapbox/dark-v11' },
 };
 
-export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers de marcador (fora do componente → sem re-criação a cada render)
+// ─────────────────────────────────────────────────────────────────────────────
+function createOriginElement(name: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = 'custom-marker origin-marker';
+  el.innerHTML = '<span>O</span>';
+  el.title = `Origem: ${name}`;
+  return el;
+}
+
+function createDestElement(order: number, name: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = 'custom-marker destination-marker';
+  el.innerHTML = `<span>${order}</span>`;
+  el.title = `Parada ${order}: ${name}`;
+  return el;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MapView
+// ─────────────────────────────────────────────────────────────────────────────
+const MapViewInner = forwardRef<MapViewHandle, MapViewProps>(({
   origin,
   destinations,
   route,
@@ -43,56 +73,55 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
 }, ref) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
-  const markersRef = useRef<mapboxgl.Marker[]>([]);
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null);
 
+  // ── Estado interno do mapa em refs para evitar re-renders desnecessários ──
+  const is3DModeRef = useRef(true);
+  const currentStyleRef = useRef<MapStyleType>('realistic');
+  // Estado mínimo para o useImperativeHandle e a sidebar
+  const [is3DMode, setIs3DMode] = useState(true);
   const [currentStyle, setCurrentStyle] = useState<MapStyleType>('realistic');
-  const [is3DMode, setIs3DMode] = useState<boolean>(true);
 
-  // Guardar refs de props para callbacks sem causar re-renders/leaks
+  // ── Mapa de marcadores por ID para diffing eficiente ──
+  const originMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const destMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+
+  // ── Refs de props para callbacks estáveis ──
   const onMapClickPointRef = useRef(onMapClickPoint);
   onMapClickPointRef.current = onMapClickPoint;
-
+  const onUserLocationFoundRef = useRef(onUserLocationFound);
+  onUserLocationFoundRef.current = onUserLocationFound;
   const onStateChangeRef = useRef(onStateChange);
   onStateChangeRef.current = onStateChange;
 
-  // Configura / Re-injeta fontes e camadas de rota e 3D após carregamento do estilo
-  const setupMapLayers = useCallback(() => {
-    if (!map.current) return;
+  // ── setupMapLayers via ref para evitar re-registro no style.load ──
+  const setupMapLayersRef = useRef<() => void>(() => {});
+  setupMapLayersRef.current = () => {
+    const m = map.current;
+    if (!m) return;
+    const style = currentStyleRef.current;
 
-    // 1. Configurar Terreno 3D
-    if (currentStyle !== 'realistic' && !map.current.getSource('mapbox-dem')) {
+    if (style !== 'realistic' && !m.getSource('mapbox-dem')) {
       try {
-        map.current.addSource('mapbox-dem', {
+        m.addSource('mapbox-dem', {
           type: 'raster-dem',
           url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
           tileSize: 512,
           maxzoom: 14,
         });
-        map.current.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
-      } catch (e) {
-        // fonte já adicionada
-      }
+        m.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
+      } catch (_) {}
     }
 
-    // 2. Fonte GeoJSON da rota
-    if (!map.current.getSource('route')) {
-      map.current.addSource('route', {
+    if (!m.getSource('route')) {
+      m.addSource('route', {
         type: 'geojson',
-        data: {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: route?.geometry?.coordinates || [],
-          },
-        },
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [] } },
       });
     }
 
-    // 3. Glow da rota
-    if (!map.current.getLayer('route-line-casing')) {
-      map.current.addLayer({
+    if (!m.getLayer('route-line-casing')) {
+      m.addLayer({
         id: 'route-line-casing',
         type: 'line',
         source: 'route',
@@ -101,9 +130,8 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
       });
     }
 
-    // 4. Linha da rota
-    if (!map.current.getLayer('route-line')) {
-      map.current.addLayer({
+    if (!m.getLayer('route-line')) {
+      m.addLayer({
         id: 'route-line',
         type: 'line',
         source: 'route',
@@ -112,15 +140,14 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
       });
     }
 
-    // 5. Prédios 3D (estilos vetoriais legados)
-    if (currentStyle !== 'realistic' && currentStyle !== 'satellite') {
-      const layers = map.current.getStyle().layers;
+    if (style !== 'realistic' && style !== 'satellite') {
+      const layers = m.getStyle().layers;
       const labelLayerId = layers?.find(
-        (layer) => layer.type === 'symbol' && layer.layout && (layer.layout as any)['text-field']
+        (l) => l.type === 'symbol' && l.layout && (l.layout as any)['text-field']
       )?.id;
 
-      if (!map.current.getLayer('3d-buildings')) {
-        map.current.addLayer(
+      if (!m.getLayer('3d-buildings')) {
+        m.addLayer(
           {
             id: '3d-buildings',
             source: 'composite',
@@ -134,12 +161,10 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
                 0, '#e2e8f0', 30, '#cbd5e1', 70, '#94a3b8', 120, '#3b82f6',
               ],
               'fill-extrusion-height': [
-                'interpolate', ['linear'], ['zoom'],
-                14, 0, 14.05, ['get', 'height'],
+                'interpolate', ['linear'], ['zoom'], 14, 0, 14.05, ['get', 'height'],
               ],
               'fill-extrusion-base': [
-                'interpolate', ['linear'], ['zoom'],
-                14, 0, 14.05, ['get', 'min_height'],
+                'interpolate', ['linear'], ['zoom'], 14, 0, 14.05, ['get', 'min_height'],
               ],
               'fill-extrusion-opacity': 0.8,
             },
@@ -148,9 +173,9 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
         );
       }
     }
-  }, [currentStyle, route]);
+  };
 
-  // Inicialização única do Mapa
+  // ── Inicialização única ──
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
@@ -168,25 +193,28 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
       pitch: 55,
       bearing: -15,
       antialias: true,
+      // Limitar FPS quando o mapa está parado economiza CPU/GPU
+      fadeDuration: 200,
     });
 
     map.current = mapInstance;
 
-    mapInstance.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+    mapInstance.addControl(
+      new mapboxgl.NavigationControl({ visualizePitch: true }),
+      'top-right'
+    );
 
+    // style.load: usa ref para sempre ler a versão mais atual de setupMapLayers
     mapInstance.on('style.load', () => {
-      setupMapLayers();
+      setupMapLayersRef.current();
     });
 
     mapInstance.on('click', async (e) => {
       if (!onMapClickPointRef.current || !map.current) return;
-
       const { lng, lat } = e.lngLat;
 
-      if (clickPopupRef.current) {
-        clickPopupRef.current.remove();
-        clickPopupRef.current = null;
-      }
+      clickPopupRef.current?.remove();
+      clickPopupRef.current = null;
 
       const popupDiv = document.createElement('div');
       popupDiv.className = 'map-click-popup';
@@ -220,33 +248,32 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
             popup.remove();
           }
         };
-      } catch (err) {
+      } catch {
         popupDiv.innerHTML = `<div class="popup-error">Não foi possível obter endereço deste ponto.</div>`;
       }
     });
 
     return () => {
-      if (clickPopupRef.current) clickPopupRef.current.remove();
-      markersRef.current.forEach((m) => m.remove());
-      markersRef.current = [];
+      clickPopupRef.current?.remove();
+      originMarkerRef.current?.remove();
+      originMarkerRef.current = null;
+      destMarkersRef.current.forEach((m) => m.remove());
+      destMarkersRef.current.clear();
       mapInstance.remove();
       map.current = null;
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Funções de controle do mapa
+  // ── Controles do mapa (estáveis via useCallback com deps mínimas) ──
   const handleLocateMe = useCallback(() => {
     if (!navigator.geolocation) {
       alert('Geolocalização não é suportada pelo seu navegador.');
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { longitude, latitude } = pos.coords;
-        if (map.current) {
-          map.current.flyTo({ center: [longitude, latitude], zoom: 16, pitch: 55, essential: true });
-        }
-        onUserLocationFound?.(longitude, latitude);
+      ({ coords: { longitude, latitude } }) => {
+        map.current?.flyTo({ center: [longitude, latitude], zoom: 16, pitch: 55, essential: true });
+        onUserLocationFoundRef.current?.(longitude, latitude);
       },
       (err) => {
         console.warn('Erro ao obter localização:', err);
@@ -254,29 +281,34 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
-  }, [onUserLocationFound]);
+  }, []);
 
   const handleToggle3D = useCallback(() => {
     if (!map.current) return;
-    const next = !is3DMode;
+    const next = !is3DModeRef.current;
+    is3DModeRef.current = next;
     setIs3DMode(next);
     map.current.easeTo({ pitch: next ? 60 : 0, bearing: next ? -20 : 0, duration: 1000 });
-    onStateChangeRef.current?.(next, currentStyle);
-  }, [is3DMode, currentStyle]);
+    onStateChangeRef.current?.(next, currentStyleRef.current);
+  }, []);
 
   const handleRotate = useCallback(() => {
     if (!map.current) return;
-    map.current.easeTo({ bearing: map.current.getBearing() + 180, pitch: is3DMode ? 60 : 45, duration: 2500 });
-  }, [is3DMode]);
+    map.current.easeTo({
+      bearing: map.current.getBearing() + 180,
+      pitch: is3DModeRef.current ? 60 : 45,
+      duration: 2500,
+    });
+  }, []);
 
   const handleChangeStyle = useCallback((styleKey: MapStyleType) => {
-    if (!map.current || currentStyle === styleKey) return;
+    if (!map.current || currentStyleRef.current === styleKey) return;
+    currentStyleRef.current = styleKey;
     setCurrentStyle(styleKey);
     map.current.setStyle(MAP_STYLES[styleKey].url);
-    onStateChangeRef.current?.(is3DMode, styleKey);
-  }, [currentStyle, is3DMode]);
+    onStateChangeRef.current?.(is3DModeRef.current, styleKey);
+  }, []);
 
-  // Expor controles via ref para o componente pai
   useImperativeHandle(ref, () => ({
     locateMe: handleLocateMe,
     toggle3D: handleToggle3D,
@@ -286,78 +318,98 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
     currentStyle,
   }), [handleLocateMe, handleToggle3D, handleRotate, handleChangeStyle, is3DMode, currentStyle]);
 
-  // Atualização dos Marcadores
+  // ── Diffing de marcadores: só cria/remove o que mudou ──
   useEffect(() => {
     if (!map.current) return;
 
-    markersRef.current.forEach((marker) => marker.remove());
-    markersRef.current = [];
-
-    const bounds = new mapboxgl.LngLatBounds();
-    let hasPoints = false;
-
+    // ── Origem ──
     if (origin) {
-      const el = document.createElement('div');
-      el.className = 'custom-marker origin-marker';
-      el.innerHTML = '<span>O</span>';
-      el.title = `Origem: ${origin.name}`;
-
-      const originMarker = new mapboxgl.Marker({ element: el })
-        .setLngLat([origin.longitude, origin.latitude])
-        .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(`<strong>Origem</strong><p>${origin.address}</p>`))
-        .addTo(map.current);
-
-      markersRef.current.push(originMarker);
-      bounds.extend([origin.longitude, origin.latitude]);
-      hasPoints = true;
+      if (originMarkerRef.current) {
+        // Apenas reposiciona se as coordenadas mudaram
+        originMarkerRef.current.setLngLat([origin.longitude, origin.latitude]);
+      } else {
+        const el = createOriginElement(origin.name);
+        originMarkerRef.current = new mapboxgl.Marker({ element: el })
+          .setLngLat([origin.longitude, origin.latitude])
+          .setPopup(
+            new mapboxgl.Popup({ offset: 25 }).setHTML(
+              `<strong>Origem</strong><p>${origin.address}</p>`
+            )
+          )
+          .addTo(map.current);
+      }
+    } else {
+      originMarkerRef.current?.remove();
+      originMarkerRef.current = null;
     }
 
-    destinations.forEach((dest) => {
-      const el = document.createElement('div');
-      el.className = 'custom-marker destination-marker';
-      el.innerHTML = `<span>${dest.order}</span>`;
-      el.title = `Parada ${dest.order}: ${dest.name}`;
+    // ── Destinos: diffing por ID ──
+    const currentIds = new Set(destinations.map((d) => d.id));
 
-      const destMarker = new mapboxgl.Marker({ element: el })
-        .setLngLat([dest.longitude, dest.latitude])
-        .setPopup(
-          new mapboxgl.Popup({ offset: 25 }).setHTML(
-            `<strong>Parada #${dest.order}: ${dest.name}</strong><p>${dest.address}</p>`
+    // Remover marcadores que sumiram
+    for (const [id, marker] of destMarkersRef.current) {
+      if (!currentIds.has(id)) {
+        marker.remove();
+        destMarkersRef.current.delete(id);
+      }
+    }
+
+    // Adicionar novos / atualizar existentes
+    for (const dest of destinations) {
+      const existing = destMarkersRef.current.get(dest.id);
+      if (existing) {
+        // Reposiciona e atualiza o label de ordem se necessário
+        existing.setLngLat([dest.longitude, dest.latitude]);
+        const span = existing.getElement().querySelector('span');
+        if (span && span.textContent !== String(dest.order)) {
+          span.textContent = String(dest.order);
+        }
+      } else {
+        const el = createDestElement(dest.order, dest.name);
+        const marker = new mapboxgl.Marker({ element: el })
+          .setLngLat([dest.longitude, dest.latitude])
+          .setPopup(
+            new mapboxgl.Popup({ offset: 25 }).setHTML(
+              `<strong>Parada #${dest.order}: ${dest.name}</strong><p>${dest.address}</p>`
+            )
           )
-        )
-        .addTo(map.current!);
+          .addTo(map.current!);
+        destMarkersRef.current.set(dest.id, marker);
+      }
+    }
 
-      markersRef.current.push(destMarker);
-      bounds.extend([dest.longitude, dest.latitude]);
-      hasPoints = true;
-    });
+    // FitBounds apenas quando não há rota calculada
+    if (!route) {
+      const bounds = new mapboxgl.LngLatBounds();
+      let hasPoints = false;
 
-    if (hasPoints && !route) {
-      map.current.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 1000 });
+      if (origin) { bounds.extend([origin.longitude, origin.latitude]); hasPoints = true; }
+      destinations.forEach((d) => { bounds.extend([d.longitude, d.latitude]); hasPoints = true; });
+
+      if (hasPoints) {
+        map.current.fitBounds(bounds, { padding: 80, maxZoom: 16, duration: 1000 });
+      }
     }
   }, [origin, destinations, route]);
 
-  // Atualização da Geometria da Rota
+  // ── Atualização da rota GeoJSON ──
   useEffect(() => {
     if (!map.current) return;
-
     const source = map.current.getSource('route') as mapboxgl.GeoJSONSource | undefined;
     if (!source) return;
 
-    if (route && route.geometry && route.geometry.coordinates.length > 0) {
+    if (route?.geometry?.coordinates?.length) {
       source.setData({ type: 'Feature', properties: {}, geometry: route.geometry });
-
       const bounds = new mapboxgl.LngLatBounds();
       route.geometry.coordinates.forEach((coord) => bounds.extend(coord));
-      map.current.fitBounds(bounds, { padding: 80, pitch: is3DMode ? 50 : 0, duration: 1200 });
+      map.current.fitBounds(bounds, { padding: 80, pitch: is3DModeRef.current ? 50 : 0, duration: 1200 });
     } else {
       source.setData({
-        type: 'Feature',
-        properties: {},
+        type: 'Feature', properties: {},
         geometry: { type: 'LineString', coordinates: [] },
       });
     }
-  }, [route, is3DMode]);
+  }, [route]);
 
   return (
     <div className="map-view-wrapper">
@@ -366,4 +418,7 @@ export const MapView = forwardRef<MapViewHandle, MapViewProps>(({
   );
 });
 
-MapView.displayName = 'MapView';
+MapViewInner.displayName = 'MapView';
+
+// memo: evita re-render do MapView quando apenas o estado da sidebar muda
+export const MapView = memo(MapViewInner);
