@@ -82,16 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="sidebar-floating-wrap">
-      {/* Botão de toggle — sempre visível */}
-      <button
-        type="button"
-        className="sfp-toggle-btn"
-        onClick={() => setIsOpen((v) => !v)}
-        title={isOpen ? 'Fechar painel' : 'Abrir painel'}
-      >
-        {isOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-      </button>
-
+      {/* Painel — o botão de toggle fica dentro do header */}
       <div className={`sidebar-panel${isOpen ? '' : ' sidebar-panel--collapsed'}`}>
 
         {/* Header */}
@@ -100,17 +91,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="sfp-brand-icon">
               <Navigation size={18} color="#fff" />
             </div>
-            <div>
-              <h1 className="sfp-title">RotaFácil</h1>
-              <p className="sfp-subtitle">Planejador de Entregas</p>
-            </div>
+            {isOpen && (
+              <div>
+                <h1 className="sfp-title">RotaFácil</h1>
+                <p className="sfp-subtitle">Planejador de Entregas</p>
+              </div>
+            )}
           </div>
-          {(origin || destinations.length > 0) && (
-            <button type="button" className="sfp-btn-clear" onClick={onResetAll} title="Limpar tudo">
-              <RotateCcw size={13} />
-              Limpar
+
+          <div className="sfp-header-actions">
+            {isOpen && (origin || destinations.length > 0) && (
+              <button type="button" className="sfp-btn-clear" onClick={onResetAll} title="Limpar tudo">
+                <RotateCcw size={13} />
+                Limpar
+              </button>
+            )}
+            <button
+              type="button"
+              className="sfp-toggle-btn"
+              onClick={() => setIsOpen((v) => !v)}
+              title={isOpen ? 'Fechar painel' : 'Abrir painel'}
+              aria-label={isOpen ? 'Fechar painel' : 'Abrir painel'}
+            >
+              {isOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
             </button>
-          )}
+          </div>
         </header>
 
         {/* Hub de controles do mapa */}
