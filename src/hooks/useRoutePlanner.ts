@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Origin, Destination, CalculatedRoute, GeocodingFeature } from '../types';
 import { destinationStorage } from '../services/storage/destinationStorage';
 import { calculateRoute } from '../services/mapbox/directions';
@@ -11,6 +11,9 @@ export function useRoutePlanner() {
   const [route, setRoute] = useState<CalculatedRoute | null>(null);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
   const [routeError, setRouteError] = useState<string | null>(null);
+
+  // Ref para evitar recálculos redundantes e controlar race conditions / debounce
+  const lastCalculatedKeyRef = useRef<string>('');
 
   // Persistir alterações no LocalStorage
   useEffect(() => {
@@ -26,7 +29,18 @@ export function useRoutePlanner() {
     if (!origin || destinations.length === 0) {
       setRoute(null);
       setRouteError(null);
+      lastCalculatedKeyRef.current = '';
       return;
+    }
+
+    // Cria uma chave única baseada nas coordenadas e ordem atual para evitar chamadas idênticas
+    const routeKey = JSON.stringify({
+      origin: [origin.longitude, origin.latitude],
+      dests: destinations.map((d) => [d.id, d.longitude, d.latitude, d.order]),
+    });
+
+    if (routeKey === lastCalculatedKeyRef.current) {
+      return; // Já calculado para esta exata configuração
     }
 
     setIsCalculating(true);
@@ -35,7 +49,9 @@ export function useRoutePlanner() {
     try {
       const allWaypoints = [origin, ...destinations];
       const result = await calculateRoute(allWaypoints);
+      
       setRoute(result);
+      lastCalculatedKeyRef.current = routeKey;
     } catch (err: any) {
       setRoute(null);
       setRouteError(err.message || 'Falha ao calcular o trajeto da rota.');
@@ -45,7 +61,11 @@ export function useRoutePlanner() {
   }, [origin, destinations]);
 
   useEffect(() => {
-    triggerRouteCalculation();
+    const timer = setTimeout(() => {
+      triggerRouteCalculation();
+    }, 300); // Debounce de 300ms para reordenações rápidas
+
+    return () => clearTimeout(timer);
   }, [triggerRouteCalculation]);
 
   const selectOrigin = (feature: GeocodingFeature) => {
@@ -61,11 +81,14 @@ export function useRoutePlanner() {
 
   const clearOrigin = () => {
     setOrigin(null);
+    setRoute(null);
   };
 
   const addDestination = (feature: GeocodingFeature) => {
+    const uniqueId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    
     const newDest: Destination = {
-      id: `${feature.id}-${Date.now()}`,
+      id: `${feature.id}-${uniqueId}`,
       name: feature.text,
       address: feature.place_name,
       longitude: feature.center[0],
@@ -113,6 +136,7 @@ export function useRoutePlanner() {
     setDestinations([]);
     setRoute(null);
     setRouteError(null);
+    lastCalculatedKeyRef.current = '';
   };
 
   return {

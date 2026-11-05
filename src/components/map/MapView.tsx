@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import { Origin, Destination, CalculatedRoute, GeocodingFeature } from '../../types';
 import { MAPBOX_TOKEN } from '../../services/mapbox/mapboxClient';
@@ -16,12 +16,12 @@ interface MapViewProps {
 type MapStyleType = 'standard' | 'realistic' | 'satellite' | 'streets' | 'outdoors' | 'dark';
 
 const MAP_STYLES: Record<MapStyleType, { label: string; url: string }> = {
-  standard: { label: 'Padrão', url: 'mapbox://styles/mapbox/streets-v12' },
-  realistic: { label: 'Realista (3D)', url: 'mapbox://styles/mapbox/standard' },
+  realistic: { label: 'Realista 3D (Standard)', url: 'mapbox://styles/mapbox/standard' },
+  standard: { label: 'Vetor Padrão', url: 'mapbox://styles/mapbox/streets-v12' },
   satellite: { label: 'Satélite HD', url: 'mapbox://styles/mapbox/satellite-streets-v12' },
   streets: { label: 'Ruas', url: 'mapbox://styles/mapbox/streets-v12' },
-  outdoors: { label: 'Relevo', url: 'mapbox://styles/mapbox/outdoors-v12' },
-  dark: { label: 'Escuro 3D', url: 'mapbox://styles/mapbox/dark-v11' },
+  outdoors: { label: 'Relevo Topográfico', url: 'mapbox://styles/mapbox/outdoors-v12' },
+  dark: { label: 'Modo Escuro', url: 'mapbox://styles/mapbox/dark-v11' },
 };
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -36,10 +36,14 @@ export const MapView: React.FC<MapViewProps> = ({
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const clickPopupRef = useRef<mapboxgl.Popup | null>(null);
 
-  const [currentStyle, setCurrentStyle] = useState<MapStyleType>('standard');
+  const [currentStyle, setCurrentStyle] = useState<MapStyleType>('realistic');
   const [is3DMode, setIs3DMode] = useState<boolean>(true);
   const [showStyleMenu, setShowStyleMenu] = useState<boolean>(false);
   const styleMenuRef = useRef<HTMLDivElement>(null);
+
+  // Guardar refs de props para callbacks sem causar re-renders/leaks
+  const onMapClickPointRef = useRef(onMapClickPoint);
+  onMapClickPointRef.current = onMapClickPoint;
 
   // Fecha menu de estilos ao clicar fora
   useEffect(() => {
@@ -52,11 +56,26 @@ export const MapView: React.FC<MapViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Adiciona a camada de rota e edifícios 3D se o estilo for antigo
-  const configureLayersAnd3D = () => {
+  // Configura / Re-injeta fontes e camadas de rota e 3D após carregamento do estilo
+  const setupMapLayers = useCallback(() => {
     if (!map.current) return;
 
-    // 1. Configurar rota GeoJSON
+    // 1. Configurar Terreno 3D (para estilos clássicos/outdoors/satélite)
+    if (currentStyle !== 'realistic' && !map.current.getSource('mapbox-dem')) {
+      try {
+        map.current.addSource('mapbox-dem', {
+          type: 'raster-dem',
+          url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+          tileSize: 512,
+          maxzoom: 14,
+        });
+        map.current.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
+      } catch (e) {
+        // Fonte já pode ter sido adicionada
+      }
+    }
+
+    // 2. Fonte de dados GeoJSON da rota
     if (!map.current.getSource('route')) {
       map.current.addSource('route', {
         type: 'geojson',
@@ -65,12 +84,31 @@ export const MapView: React.FC<MapViewProps> = ({
           properties: {},
           geometry: {
             type: 'LineString',
-            coordinates: [],
+            coordinates: route?.geometry?.coordinates || [],
           },
         },
       });
     }
 
+    // 3. Camada externa (Glow / Brilho de fundo da rota)
+    if (!map.current.getLayer('route-line-casing')) {
+      map.current.addLayer({
+        id: 'route-line-casing',
+        type: 'line',
+        source: 'route',
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round',
+        },
+        paint: {
+          'line-color': '#1d4ed8',
+          'line-width': 10,
+          'line-opacity': 0.4,
+        },
+      });
+    }
+
+    // 4. Camada principal da linha de rota
     if (!map.current.getLayer('route-line')) {
       map.current.addLayer({
         id: 'route-line',
@@ -81,16 +119,15 @@ export const MapView: React.FC<MapViewProps> = ({
           'line-cap': 'round',
         },
         paint: {
-          'line-color': '#2563eb',
+          'line-color': '#3b82f6',
           'line-width': 6,
-          'line-opacity': 0.9,
+          'line-opacity': 0.95,
         },
       });
     }
 
-    // 2. Extrusão 3D de edifícios volumétricos coloridos em estilos vetoriais
-    const styleId = currentStyle;
-    if (styleId !== 'standard' && styleId !== 'satellite') {
+    // 5. Prédios 3D (para estilos vetoriais legados quando não for 'standard/realistic')
+    if (currentStyle !== 'realistic' && currentStyle !== 'satellite') {
       const layers = map.current.getStyle().layers;
       const labelLayerId = layers?.find(
         (layer) => layer.type === 'symbol' && layer.layout && (layer.layout as any)['text-field']
@@ -112,11 +149,11 @@ export const MapView: React.FC<MapViewProps> = ({
                 ['get', 'height'],
                 0,
                 '#e2e8f0',
-                20,
+                30,
+                '#cbd5e1',
+                70,
                 '#94a3b8',
-                50,
-                '#64748b',
-                100,
+                120,
                 '#3b82f6',
               ],
               'fill-extrusion-height': [
@@ -137,16 +174,16 @@ export const MapView: React.FC<MapViewProps> = ({
                 14.05,
                 ['get', 'min_height'],
               ],
-              'fill-extrusion-opacity': 0.85,
+              'fill-extrusion-opacity': 0.8,
             },
           },
           labelLayerId
         );
       }
     }
-  };
+  }, [currentStyle, route]);
 
-  // Inicializa o mapa com estilo 3D Standard de alta fidelidade
+  // Inicialização única do Mapa
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
@@ -154,85 +191,88 @@ export const MapView: React.FC<MapViewProps> = ({
 
     const initialCenter: [number, number] = origin
       ? [origin.longitude, origin.latitude]
-      : [-38.6217, -3.8798]; // Região de Maracanaú/CE
+      : [-38.6217, -3.8798];
 
-    map.current = new mapboxgl.Map({
+    const mapInstance = new mapboxgl.Map({
       container: mapContainer.current,
-      style: MAP_STYLES.standard.url,
+      style: MAP_STYLES.realistic.url,
       center: initialCenter,
-      zoom: 15,
-      pitch: 55, // Inicia inclinado em perspectiva 3D
+      zoom: 15.5,
+      pitch: 55,
       bearing: -15,
+      antialias: true, // Melhora a qualidade das bordas 3D
     });
 
-    map.current.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.current = mapInstance;
 
-    map.current.on('style.load', () => {
-      configureLayersAnd3D();
+    mapInstance.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
 
-      // Se já houver rota calculada, desenha no novo estilo
-      if (route && route.geometry && map.current) {
-        const source = map.current.getSource('route') as mapboxgl.GeoJSONSource | undefined;
-        source?.setData({
-          type: 'Feature',
-          properties: {},
-          geometry: route.geometry,
-        });
-      }
+    // Recarregar camadas sempre que o estilo mudar
+    mapInstance.on('style.load', () => {
+      setupMapLayers();
     });
 
-    // Clique no mapa para Reverse Geocoding
-    map.current.on('click', async (e) => {
-      if (!onMapClickPoint || !map.current) return;
+    // Clique no mapa com limpeza adequada de eventos (evita memory leaks)
+    mapInstance.on('click', async (e) => {
+      if (!onMapClickPointRef.current || !map.current) return;
 
       const { lng, lat } = e.lngLat;
 
       if (clickPopupRef.current) {
         clickPopupRef.current.remove();
+        clickPopupRef.current = null;
       }
 
       const popupDiv = document.createElement('div');
       popupDiv.className = 'map-click-popup';
       popupDiv.innerHTML = `<div class="popup-title">Buscando endereço...</div>`;
 
-      clickPopupRef.current = new mapboxgl.Popup({ offset: 15, closeButton: true })
+      const popup = new mapboxgl.Popup({ offset: 15, closeButton: true })
         .setLngLat([lng, lat])
         .setDOMContent(popupDiv)
         .addTo(map.current);
 
+      clickPopupRef.current = popup;
+
       try {
         const feature = await reverseGeocode(lng, lat);
-        if (!feature) return;
+        if (!feature || !clickPopupRef.current) return;
 
         popupDiv.innerHTML = `
           <div class="popup-title">${feature.text}</div>
           <div class="popup-address">${feature.place_name}</div>
           <div class="popup-actions">
-            <button id="btn-popup-origin" class="btn-popup btn-popup-orig">Definir como Origem</button>
-            <button id="btn-popup-dest" class="btn-popup btn-popup-dest">Adicionar Parada</button>
+            <button type="button" data-action="origin" class="btn-popup btn-popup-orig">Definir como Origem</button>
+            <button type="button" data-action="destination" class="btn-popup btn-popup-dest">Adicionar Parada</button>
           </div>
         `;
 
-        document.getElementById('btn-popup-origin')?.addEventListener('click', () => {
-          onMapClickPoint(feature, 'origin');
-          clickPopupRef.current?.remove();
-        });
-
-        document.getElementById('btn-popup-dest')?.addEventListener('click', () => {
-          onMapClickPoint(feature, 'destination');
-          clickPopupRef.current?.remove();
-        });
+        // Delegação de evento limpa no container
+        popupDiv.onclick = (event) => {
+          const target = event.target as HTMLElement;
+          const action = target.getAttribute('data-action');
+          if (action === 'origin' || action === 'destination') {
+            onMapClickPointRef.current?.(feature, action);
+            popup.remove();
+          }
+        };
       } catch (err) {
         popupDiv.innerHTML = `<div class="popup-error">Não foi possível obter endereço deste ponto.</div>`;
       }
     });
 
     return () => {
-      map.current?.remove();
+      if (clickPopupRef.current) {
+        clickPopupRef.current.remove();
+      }
+      markersRef.current.forEach((m) => m.remove());
+      markersRef.current = [];
+      mapInstance.remove();
       map.current = null;
     };
   }, []);
 
+  // Troca de Estilo
   const handleChangeStyle = (styleKey: MapStyleType) => {
     if (!map.current || currentStyle === styleKey) return;
     setCurrentStyle(styleKey);
@@ -274,7 +314,7 @@ export const MapView: React.FC<MapViewProps> = ({
         if (map.current) {
           map.current.flyTo({
             center: [longitude, latitude],
-            zoom: 15,
+            zoom: 16,
             pitch: 55,
             essential: true,
           });
@@ -291,10 +331,11 @@ export const MapView: React.FC<MapViewProps> = ({
     );
   };
 
-  // Marcadores no mapa
+  // Atualização dos Marcadores (Origem e Destinos)
   useEffect(() => {
     if (!map.current) return;
 
+    // Limpa marcadores anteriores para liberar memória
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = [];
 
@@ -307,7 +348,7 @@ export const MapView: React.FC<MapViewProps> = ({
       el.innerHTML = '<span>O</span>';
       el.title = `Origem: ${origin.name}`;
 
-      const originMarker = new mapboxgl.Marker(el)
+      const originMarker = new mapboxgl.Marker({ element: el })
         .setLngLat([origin.longitude, origin.latitude])
         .setPopup(
           new mapboxgl.Popup({ offset: 25 }).setHTML(`<strong>Origem</strong><p>${origin.address}</p>`)
@@ -325,11 +366,11 @@ export const MapView: React.FC<MapViewProps> = ({
       el.innerHTML = `<span>${dest.order}</span>`;
       el.title = `Parada ${dest.order}: ${dest.name}`;
 
-      const destMarker = new mapboxgl.Marker(el)
+      const destMarker = new mapboxgl.Marker({ element: el })
         .setLngLat([dest.longitude, dest.latitude])
         .setPopup(
           new mapboxgl.Popup({ offset: 25 }).setHTML(
-            `<strong>Parada #${dest.order} - ${dest.name}</strong><p>${dest.address}</p>`
+            `<strong>Parada #${dest.order}: ${dest.name}</strong><p>${dest.address}</p>`
           )
         )
         .addTo(map.current!);
@@ -348,7 +389,7 @@ export const MapView: React.FC<MapViewProps> = ({
     }
   }, [origin, destinations, route]);
 
-  // Atualiza traçado da rota
+  // Atualização da Geometria da Rota
   useEffect(() => {
     if (!map.current) return;
 
@@ -366,7 +407,7 @@ export const MapView: React.FC<MapViewProps> = ({
       route.geometry.coordinates.forEach((coord) => bounds.extend(coord));
 
       map.current.fitBounds(bounds, {
-        padding: 70,
+        padding: 80,
         pitch: is3DMode ? 50 : 0,
         duration: 1200,
       });
@@ -444,7 +485,7 @@ export const MapView: React.FC<MapViewProps> = ({
       </div>
 
       <div className="map-instruction-banner">
-        🏙️ <strong>Visão 3D Ativa:</strong> Dê zoom para ver prédios, shoppings e estruturas em volume real! Use o botão direito do mouse para girar livremente.
+        🏙️ <strong>Modo Realista 3D:</strong> Dê zoom para explorar estruturas e inclinação em tempo real! Arraste com o botão direito para orbitar.
       </div>
 
       <div ref={mapContainer} className="map-container" />
