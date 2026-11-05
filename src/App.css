@@ -80,7 +80,11 @@ body {
   z-index: 20;
   pointer-events: none; /* permite interagir com o mapa ao redor */
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  /* Anima quando o painel abre/fecha */
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Painel real com visual de card flutuante */
@@ -101,6 +105,60 @@ body {
   /* Promove o painel a sua própria layer de compositing — isola do mapa */
   will-change: transform;
   transform: translateZ(0);
+}
+
+/* Estado colapsado — esconde o painel com transição suave */
+.sidebar-panel--collapsed {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-width: 0;
+  box-shadow: none;
+  transform: translateX(-16px) translateZ(0);
+  transition:
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s ease,
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-panel:not(.sidebar-panel--collapsed) {
+  flex: 1;
+  min-width: 0;
+  transition:
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.25s ease,
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Botão de toggle — flutua ao lado do painel */
+.sfp-toggle-btn {
+  pointer-events: all;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #334155;
+  transition: all 0.15s ease;
+  will-change: transform;
+  transform: translateZ(0);
+  /* Fica fixo no topo independente do painel */
+  align-self: flex-start;
+  margin-top: 0;
+}
+
+.sfp-toggle-btn:hover {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.2);
 }
 
 /* ── Header ── */

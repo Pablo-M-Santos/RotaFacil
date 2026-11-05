@@ -9,6 +9,8 @@ import {
   RotateCw,
   Layers,
   ChevronDown,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { AddressSearch } from '../destinations/AddressSearch';
 import { DestinationList } from '../destinations/DestinationList';
@@ -72,6 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onChangeStyle,
 }) => {
   const [showStyleMenu, setShowStyleMenu] = useState(false);
+  const [isOpen, setIsOpen] = useState(true);
 
   const searchProximity: [number, number] | undefined = origin
     ? [origin.longitude, origin.latitude]
@@ -79,7 +82,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="sidebar-floating-wrap">
-      <div className="sidebar-panel">
+      {/* Botão de toggle — sempre visível */}
+      <button
+        type="button"
+        className="sfp-toggle-btn"
+        onClick={() => setIsOpen((v) => !v)}
+        title={isOpen ? 'Fechar painel' : 'Abrir painel'}
+      >
+        {isOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+      </button>
+
+      <div className={`sidebar-panel${isOpen ? '' : ' sidebar-panel--collapsed'}`}>
 
         {/* Header */}
         <header className="sfp-header">
